@@ -1,3 +1,4 @@
+require 'csv'
 require 'jsonapi/operation'
 require 'jsonapi/paginator'
 

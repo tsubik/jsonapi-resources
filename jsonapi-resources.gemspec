@@ -33,4 +33,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'activerecord', '>= 4.1'
   spec.add_dependency 'railties', '>= 4.1'
   spec.add_dependency 'concurrent-ruby'
+  # CSV parses filter, include and sort params. It was a default gem until Ruby
+  # 3.4 demoted it to a bundled gem, so it has to be declared explicitly.
+  spec.add_dependency 'csv'
 end

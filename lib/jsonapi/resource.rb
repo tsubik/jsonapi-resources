@@ -1,3 +1,4 @@
+require 'csv'
 require 'jsonapi/callbacks'
 require 'jsonapi/relationship_builder'
 require 'jsonapi/deprecation'
