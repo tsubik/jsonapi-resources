@@ -21,7 +21,9 @@ Gem::Specification.new do |spec|
 
   spec.add_development_dependency 'bundler'
   spec.add_development_dependency 'rake'
-  spec.add_development_dependency 'minitest'
+  # Minitest 6 extracted `minitest/mock` into a separate gem and drops APIs this
+  # suite relies on. Rails supports minitest >= 5.1, so stay on the 5.x line.
+  spec.add_development_dependency 'minitest', '~> 5.1'
   spec.add_development_dependency 'minitest-spec-rails'
   spec.add_development_dependency 'simplecov'
   spec.add_development_dependency 'pry'

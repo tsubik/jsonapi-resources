@@ -1,3 +1,7 @@
+# Ruby 3.1+ moved Logger to a separate gem and concurrent-ruby no longer requires
+# it, so it must be loaded before ActiveSupport or ActiveSupport::LoggerThreadSafeLevel
+# raises `uninitialized constant Logger` on Rails < 7.1.
+require 'logger'
 require 'simplecov'
 require 'database_cleaner'
 
@@ -20,7 +24,10 @@ if ENV['COVERAGE']
 end
 
 require 'active_record/railtie'
-require 'rails/test_help'
+require 'action_controller/railtie'
+# NOTE: `rails/test_help` is required after `TestApp.initialize!` (below). Since
+# Rails 8.1 it reads `Rails.application.config` at load time, so it cannot be
+# required before an application exists.
 require 'minitest/mock'
 require 'jsonapi-resources'
 require 'pry'
@@ -52,14 +59,18 @@ class TestApp < Rails::Application
   config.action_controller.action_on_unpermitted_parameters = :raise
 
   ActiveRecord::Schema.verbose = false
-  config.active_record.schema_format = :none
+  # The test schema is defined in test/fixtures/active_record.rb and loaded by
+  # hand, so Rails must not try to maintain or verify it. This used to be spelled
+  # `schema_format = :none`, but Rails 8.1 rejects anything but :ruby / :sql.
+  config.active_record.maintain_test_schema = false
   config.active_support.test_order = :random
 
   if Rails::VERSION::MAJOR >= 5
     config.active_support.halt_callback_chains_on_return_false = false
     config.active_record.time_zone_aware_types = [:time, :datetime]
     config.active_record.belongs_to_required_by_default = false
-    if Rails::VERSION::MINOR >= 2
+    # Removed in Rails 6.1; only ever needed on 5.2.
+    if Rails::VERSION::MAJOR == 5 && Rails::VERSION::MINOR >= 2
       config.active_record.sqlite3.represent_boolean_as_integer = true
     end
   end
@@ -80,7 +91,10 @@ end
 # Monkeypatch ActionController::TestCase to delete the RAW_POST_DATA on subsequent calls in the same test.
 if Rails::VERSION::MAJOR >= 5
   module ClearRawPostHeader
-    def process(action, *args)
+    # `process` takes keyword arguments (method:, params:, ...), so they must be
+    # captured and forwarded as keywords rather than collapsed into a positional
+    # hash by `*args`.
+    def process(action, *args, **kwargs)
       @request.delete_header 'RAW_POST_DATA'
       super
     end
@@ -209,6 +223,8 @@ def show_queries
 end
 
 TestApp.initialize!
+
+require 'rails/test_help'
 
 require File.expand_path('../fixtures/active_record', __FILE__)
 
@@ -443,6 +459,17 @@ DatabaseCleaner.strategy = :transaction
 # Ensure backward compatibility with Minitest 4
 Minitest::Test = MiniTest::Unit::TestCase unless defined?(Minitest::Test)
 
+# `fixture_path` (singular) was deprecated in Rails 7.1 and removed in Rails 8.0
+# in favour of `fixture_paths` (plural, an array).
+def set_fixture_path(klass)
+  path = "#{Rails.root}/fixtures"
+  if klass.respond_to?(:fixture_paths=)
+    klass.fixture_paths = [path]
+  else
+    klass.fixture_path = path
+  end
+end
+
 class Minitest::Test
   include Helpers::Assertions
   include Helpers::ValueMatchers
@@ -454,12 +481,12 @@ class Minitest::Test
     true
   end
 
-  self.fixture_path = "#{Rails.root}/fixtures"
+  set_fixture_path(self)
   fixtures :all
 end
 
 class ActiveSupport::TestCase
-  self.fixture_path = "#{Rails.root}/fixtures"
+  set_fixture_path(self)
   fixtures :all
   setup do
     @routes = TestApp.routes
@@ -467,7 +494,7 @@ class ActiveSupport::TestCase
 end
 
 class ActionDispatch::IntegrationTest
-  self.fixture_path = "#{Rails.root}/fixtures"
+  set_fixture_path(self)
   fixtures :all
 
   def assert_jsonapi_response(expected_status, msg = nil)
@@ -519,13 +546,16 @@ class ActionDispatch::IntegrationTest
 end
 
 class ActionController::TestCase
-  def assert_cacheable_get(action, *args)
+  # `get` takes keyword arguments (params:, headers:, ...), so they must be
+  # captured and forwarded as keywords rather than collapsed into a positional
+  # hash by `*args`.
+  def assert_cacheable_get(action, *args, **kwargs)
     assert_nil JSONAPI.configuration.resource_cache
 
     normal_queries = []
     normal_query_callback = lambda {|_, _, _, _, payload| normal_queries.push payload[:sql] }
     ActiveSupport::Notifications.subscribed(normal_query_callback, 'sql.active_record') do
-      get action, *args
+      get action, *args, **kwargs
     end
     non_caching_response = json_response_sans_backtraces
     non_caching_status = response.status
@@ -559,7 +589,7 @@ class ActionController::TestCase
               @controller = nil
               setup_controller_request_and_response
               @request.headers.merge!(orig_request_headers.dup)
-              get action, *args
+              get action, *args, **kwargs
             end
           end
         rescue Exception
